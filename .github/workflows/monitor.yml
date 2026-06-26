@@ -20,6 +20,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # full history so we can rebase the state commit on push races
 
       - uses: actions/setup-python@v5
         with:
@@ -42,12 +44,27 @@ jobs:
 
       - name: Persist state
         run: |
-          if [[ -n "$(git status --porcelain state.json)" ]]; then
-            git config user.name  "toplo-monitor[bot]"
-            git config user.email "actions@users.noreply.github.com"
-            git add state.json
-            git commit -m "chore: update outage state [skip ci]"
-            git push
-          else
+          if [[ -z "$(git status --porcelain state.json)" ]]; then
             echo "No state change to commit."
+            exit 0
           fi
+          git config user.name  "toplo-monitor[bot]"
+          git config user.email "actions@users.noreply.github.com"
+          git add state.json
+          git commit -m "chore: update outage state [skip ci]"
+
+          # main can advance between checkout and push (e.g. a human pushing
+          # code). Rebase our single state-only commit onto the latest main and
+          # retry. state.json has no other writer, so the rebase stays clean.
+          branch="${GITHUB_REF_NAME:-main}"
+          for attempt in 1 2 3 4 5; do
+            if git push origin "HEAD:${branch}"; then
+              echo "Pushed state on attempt ${attempt}."
+              exit 0
+            fi
+            echo "Push rejected; rebasing on origin/${branch} (attempt ${attempt})."
+            git fetch origin "${branch}"
+            git rebase "origin/${branch}" || { git rebase --abort; exit 1; }
+          done
+          echo "Failed to push state after retries." >&2
+          exit 1
