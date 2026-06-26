@@ -40,16 +40,18 @@ jobs:
       - run: pip install -r requirements.txt
 
       - name: Run monitor
+        # Each value may live as an Environment *secret* OR *variable* (only the
+        # SMTP password needs to be secret), so read from whichever has it.
         env:
-          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-          TELEGRAM_CHAT_ID:   ${{ secrets.TELEGRAM_CHAT_ID }}
-          SMTP_HOST:          ${{ secrets.SMTP_HOST }}
-          SMTP_PORT:          ${{ secrets.SMTP_PORT }}
-          SMTP_USER:          ${{ secrets.SMTP_USER }}
-          SMTP_PASS:          ${{ secrets.SMTP_PASS }}
-          EMAIL_FROM:         ${{ secrets.EMAIL_FROM }}
-          EMAIL_TO:           ${{ secrets.EMAIL_TO }}
-          WEBHOOK_URL:        ${{ secrets.WEBHOOK_URL }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN || vars.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID:   ${{ secrets.TELEGRAM_CHAT_ID   || vars.TELEGRAM_CHAT_ID }}
+          SMTP_HOST:          ${{ secrets.SMTP_HOST          || vars.SMTP_HOST }}
+          SMTP_PORT:          ${{ secrets.SMTP_PORT          || vars.SMTP_PORT }}
+          SMTP_USER:          ${{ secrets.SMTP_USER          || vars.SMTP_USER }}
+          SMTP_PASS:          ${{ secrets.SMTP_PASS          || vars.SMTP_PASS }}
+          EMAIL_FROM:         ${{ secrets.EMAIL_FROM         || vars.EMAIL_FROM }}
+          EMAIL_TO:           ${{ secrets.EMAIL_TO           || vars.EMAIL_TO }}
+          WEBHOOK_URL:        ${{ secrets.WEBHOOK_URL        || vars.WEBHOOK_URL }}
         run: python toplo_monitor.py ${{ inputs.test == true && '--test' || '' }}
 
       - name: Persist state
