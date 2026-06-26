@@ -1,0 +1,20 @@
+[
+  {
+    "label": "Home (Svishtov 4, Banishora)",
+    "neighborhood": "Банишора",
+    "street": "Свищов",
+    "house_number": "4",
+    "block": "",
+    "lat": 42.7065538,
+    "lng": 23.3106125
+  },
+  {
+    "label": "Office (Topli dol 1a, Borovo)",
+    "neighborhood": "Борово",
+    "street": "Топли дол",
+    "house_number": "1а",
+    "block": "",
+    "lat": 42.6703155,
+    "lng": 23.2886895
+  }
+]

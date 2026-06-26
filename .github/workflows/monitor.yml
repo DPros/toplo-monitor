@@ -1,0 +1,53 @@
+name: toplo-monitor
+
+on:
+  schedule:
+    # Every 3 hours. For once-daily use: "0 6 * * *" (06:00 UTC = 09:00 Sofia).
+    # Note: GitHub may delay scheduled runs, and a scheduled workflow is
+    # auto-disabled after 60 days with no repo activity.
+    - cron: "0 */3 * * *"
+  workflow_dispatch: {}   # lets you trigger a run manually from the Actions tab
+
+permissions:
+  contents: write          # required to commit state.json back to the repo
+
+concurrency:
+  group: toplo-monitor
+  cancel-in-progress: false
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - run: pip install -r requirements.txt
+
+      - name: Run monitor
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID:   ${{ secrets.TELEGRAM_CHAT_ID }}
+          SMTP_HOST:          ${{ secrets.SMTP_HOST }}
+          SMTP_PORT:          ${{ secrets.SMTP_PORT }}
+          SMTP_USER:          ${{ secrets.SMTP_USER }}
+          SMTP_PASS:          ${{ secrets.SMTP_PASS }}
+          EMAIL_FROM:         ${{ secrets.EMAIL_FROM }}
+          EMAIL_TO:           ${{ secrets.EMAIL_TO }}
+          WEBHOOK_URL:        ${{ secrets.WEBHOOK_URL }}
+        run: python toplo_monitor.py
+
+      - name: Persist state
+        run: |
+          if [[ -n "$(git status --porcelain state.json)" ]]; then
+            git config user.name  "toplo-monitor[bot]"
+            git config user.email "actions@users.noreply.github.com"
+            git add state.json
+            git commit -m "chore: update outage state [skip ci]"
+            git push
+          else
+            echo "No state change to commit."
+          fi
