@@ -55,21 +55,28 @@ jobs:
           fi
           git config user.name  "toplo-monitor[bot]"
           git config user.email "actions@users.noreply.github.com"
-          git add state.json
-          git commit -m "chore: update outage state [skip ci]"
 
-          # main can advance between checkout and push (e.g. a human pushing
-          # code). Rebase our single state-only commit onto the latest main and
-          # retry. state.json has no other writer, so the rebase stays clean.
+          # state.json is regenerated in full every run and owned solely by this
+          # job. On a push race we must NOT merge/rebase (two runs both rewrite
+          # the file -> conflict); instead re-apply OUR freshly-computed file on
+          # top of the latest remote tip and retry.
           branch="${GITHUB_REF_NAME:-main}"
+          cp state.json /tmp/state.json
           for attempt in 1 2 3 4 5; do
+            git fetch --quiet origin "${branch}"
+            git reset --hard --quiet "origin/${branch}"
+            cp /tmp/state.json state.json
+            git add state.json
+            if git diff --cached --quiet; then
+              echo "Remote already has this state; nothing to push."
+              exit 0
+            fi
+            git commit --quiet -m "chore: update outage state [skip ci]"
             if git push origin "HEAD:${branch}"; then
               echo "Pushed state on attempt ${attempt}."
               exit 0
             fi
-            echo "Push rejected; rebasing on origin/${branch} (attempt ${attempt})."
-            git fetch origin "${branch}"
-            git rebase "origin/${branch}" || { git rebase --abort; exit 1; }
+            echo "Push rejected; re-syncing on origin/${branch} (attempt ${attempt})."
           done
           echo "Failed to push state after retries." >&2
           exit 1
