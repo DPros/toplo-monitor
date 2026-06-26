@@ -1,16 +1,4 @@
 {
-  "active": {
-    "TEST – Захарна Фабрика outage::dd4621294d63afda": {
-      "label": "TEST – Захарна Фабрика outage",
-      "tier": "affected",
-      "reason": "address falls inside the outage polygon",
-      "neighborhood": "Захарна Фабрика",
-      "area_text": "целият квартал",
-      "kind": "repairs",
-      "phase": "active",
-      "start": "2026-06-22T07:00:00Z",
-      "recovery": "2026-06-26T23:59:00Z"
-    }
-  },
-  "last_run": "2026-06-26T13:41:27.073570+00:00"
+  "active": {},
+  "last_run": "2026-06-26T16:55:27.850467+00:00"
 }
