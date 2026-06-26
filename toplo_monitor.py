@@ -484,51 +484,66 @@ def _format_alert(record: dict, resolved: bool = False) -> str:
     return "\n".join(lines)
 
 
-def notify_telegram(text: str) -> None:
+def notify_telegram(text: str) -> str:
+    """Return a one-line human status (sent / skipped). Raises on a real error."""
     token = os.environ.get("TELEGRAM_BOT_TOKEN")
     chat_id = os.environ.get("TELEGRAM_CHAT_ID")
     if not (token and chat_id):
-        return
+        return "telegram: skipped (TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID not set)"
     import requests
-    requests.post(
+    r = requests.post(
         f"https://api.telegram.org/bot{token}/sendMessage",
         json={"chat_id": chat_id, "text": text, "disable_web_page_preview": True},
         timeout=30,
     )
+    r.raise_for_status()
+    return "telegram: sent"
 
 
-def notify_email(subject: str, text: str) -> None:
+def notify_email(subject: str, text: str) -> str:
     host = os.environ.get("SMTP_HOST")
+    to = os.environ.get("EMAIL_TO", "")
     if not host:
-        return
+        return "email: skipped (SMTP_HOST not set)"
+    if not to:
+        return "email: skipped (EMAIL_TO not set)"
     import smtplib
     from email.mime.text import MIMEText
 
     msg = MIMEText(text, _charset="utf-8")
     msg["Subject"] = subject
     msg["From"] = os.environ.get("EMAIL_FROM", os.environ.get("SMTP_USER", ""))
-    msg["To"] = os.environ.get("EMAIL_TO", "")
+    msg["To"] = to
 
     port = int(os.environ.get("SMTP_PORT", "587"))
-    with smtplib.SMTP(host, port, timeout=30) as s:
-        s.starttls()
-        user, pw = os.environ.get("SMTP_USER"), os.environ.get("SMTP_PASS")
+    user, pw = os.environ.get("SMTP_USER"), os.environ.get("SMTP_PASS")
+    # Port 465 = implicit TLS (SMTP_SSL); 587/25 = plaintext + STARTTLS.
+    if port == 465:
+        ctx = smtplib.SMTP_SSL(host, port, timeout=30)
+    else:
+        ctx = smtplib.SMTP(host, port, timeout=30)
+    with ctx as s:
+        if port != 465:
+            s.starttls()
         if user and pw:
             s.login(user, pw)
         s.send_message(msg)
+    return f"email: sent to {to} via {host}:{port}"
 
 
-def notify_webhook(payload: dict) -> None:
+def notify_webhook(payload: dict) -> str:
     url = os.environ.get("WEBHOOK_URL")
     if not url:
-        return
+        return "webhook: skipped (WEBHOOK_URL not set)"
     import requests
-    requests.post(url, json=payload, timeout=30)
+    r = requests.post(url, json=payload, timeout=30)
+    r.raise_for_status()
+    return "webhook: sent"
 
 
 def dispatch(new_alerts: list[dict], resolved: list[dict]) -> None:
     if not new_alerts and not resolved:
-        print("No changes since last run.")
+        print("No changes since last run — nothing to notify.")
         return
 
     sections = []
@@ -538,13 +553,15 @@ def dispatch(new_alerts: list[dict], resolved: list[dict]) -> None:
     subject = f"toplo: {len(new_alerts)} new, {len(resolved)} resolved"
 
     # Fire each channel independently; one failing must not block the others.
+    # Each notifier reports whether it sent or why it skipped, so the run log
+    # shows exactly what happened (a silent skip looked identical to a failure).
     for fn, args in (
         (notify_telegram, (text,)),
         (notify_email, (subject, text)),
         (notify_webhook, ({"new": new_alerts, "resolved": resolved},)),
     ):
         try:
-            fn(*args)
+            print(fn(*args))
         except Exception as e:  # noqa: BLE001
             print(f"notifier {fn.__name__} failed: {e}", file=sys.stderr)
 
@@ -555,7 +572,26 @@ def dispatch(new_alerts: list[dict], resolved: list[dict]) -> None:
 # Entry point
 # --------------------------------------------------------------------------- #
 
-def main() -> int:
+def _test_alert() -> dict:
+    """A synthetic alert used by `--test` to exercise the delivery channels."""
+    return {
+        "label": "TEST", "tier": "affected", "reason": "test notification — ignore",
+        "neighborhood": "—", "area_text": "If you received this, delivery works.",
+        "kind": "accident", "phase": Phase.ACTIVE, "start": None, "recovery": None,
+    }
+
+
+def main(argv: list[str] | None = None) -> int:
+    argv = sys.argv[1:] if argv is None else argv
+
+    # `--test`: send a sample notification through every configured channel and
+    # exit, without touching the live site or state.json. Lets you confirm the
+    # email/Telegram/webhook config end-to-end without waiting for a real outage.
+    if "--test" in argv:
+        print("Sending a TEST notification through all configured channels…")
+        dispatch([_test_alert()], [])
+        return 0
+
     addresses = load_addresses()
     state = load_state()
     now = datetime.now(timezone.utc)

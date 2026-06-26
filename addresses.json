@@ -16,5 +16,14 @@
     "block": "",
     "lat": 42.6703155,
     "lng": 23.2886895
+  },
+  {
+    "label": "TEST – Захарна Фабрика outage",
+    "neighborhood": "Захарна Фабрика",
+    "street": "",
+    "house_number": "",
+    "block": "",
+    "lat": 42.7180815,
+    "lng": 23.2907171
   }
 ]

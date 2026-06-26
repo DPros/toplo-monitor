@@ -1,11 +1,12 @@
 """Quick checks against the actual strings seen on toplo.bg (25 Jun 2026)."""
 import json
+import os
 from datetime import datetime, timedelta, timezone
 from toplo_monitor import (
     Address, Outage, Tier, Phase, match_address, parse_blocks, parse_streets,
     strip_neighborhood, is_whole_neighborhood, is_polygon,
     point_in_polygon, rings_from_geojson, parse_outages_html,
-    outage_phase, _format_alert,
+    outage_phase, _format_alert, notify_email, notify_telegram, notify_webhook,
 )
 
 def check(name, got, want):
@@ -142,6 +143,16 @@ planned_rec = {"label": "Home", "tier": "affected", "reason": "inside polygon",
 msg = _format_alert(planned_rec)
 passed &= check("alert tags planned+upcoming", ("Planned" in msg and "UPCOMING" in msg), True)
 passed &= check("alert shows start time", "Starts: 2026-06-26T14:00:00Z" in msg, True)
+
+# --- notifiers report a clear skip reason instead of silently doing nothing ---
+for _v in ("SMTP_HOST", "EMAIL_TO", "TELEGRAM_BOT_TOKEN", "TELEGRAM_CHAT_ID", "WEBHOOK_URL"):
+    os.environ.pop(_v, None)
+passed &= check("email skip names SMTP_HOST", "SMTP_HOST" in notify_email("s", "t"), True)
+os.environ["SMTP_HOST"] = "smtp.example.com"
+passed &= check("email skip names EMAIL_TO", "EMAIL_TO" in notify_email("s", "t"), True)
+os.environ.pop("SMTP_HOST", None)
+passed &= check("telegram skip status", notify_telegram("t").startswith("telegram: skipped"), True)
+passed &= check("webhook skip status", notify_webhook({}).startswith("webhook: skipped"), True)
 
 print("\nALL PASSED" if passed else "\nSOME FAILED")
 raise SystemExit(0 if passed else 1)

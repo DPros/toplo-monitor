@@ -6,7 +6,12 @@ on:
     # Note: GitHub may delay scheduled runs, and a scheduled workflow is
     # auto-disabled after 60 days with no repo activity.
     - cron: "0 */3 * * *"
-  workflow_dispatch: {}   # lets you trigger a run manually from the Actions tab
+  workflow_dispatch:      # lets you trigger a run manually from the Actions tab
+    inputs:
+      test:
+        description: "Send a TEST notification through all configured channels and exit"
+        type: boolean
+        default: false
 
 permissions:
   contents: write          # required to commit state.json back to the repo
@@ -40,7 +45,7 @@ jobs:
           EMAIL_FROM:         ${{ secrets.EMAIL_FROM }}
           EMAIL_TO:           ${{ secrets.EMAIL_TO }}
           WEBHOOK_URL:        ${{ secrets.WEBHOOK_URL }}
-        run: python toplo_monitor.py
+        run: python toplo_monitor.py ${{ inputs.test == true && '--test' || '' }}
 
       - name: Persist state
         run: |
