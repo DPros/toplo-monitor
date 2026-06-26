@@ -23,6 +23,11 @@ concurrency:
 jobs:
   check:
     runs-on: ubuntu-latest
+    # Secrets (SMTP_*, etc.) are scoped to the "test" GitHub Environment, so the
+    # job must declare it to read them. Note: if this environment has protection
+    # rules (required reviewers / wait timer), scheduled runs will PAUSE for
+    # approval — keep it rule-free for an unattended monitor.
+    environment: test
     steps:
       - uses: actions/checkout@v4
         with:
