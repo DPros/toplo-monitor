@@ -44,7 +44,10 @@ STATE_FILE = ROOT / "state.json"
 ACCIDENTS_URL = "https://toplo.bg/accidents-and-maintenance"
 
 # Keywords (lowercased) used by the matcher. Add variants as you see them.
-WHOLE_NEIGHBORHOOD_KW = ("целия квартал", "цялия квартал", "whole neighborhood")
+WHOLE_NEIGHBORHOOD_KW = ("whole neighborhood",)
+# Bulgarian renders "whole neighborhood" with several inflections of цял/цел —
+# целия / целият / цялата / цялия квартал — so match the stem, not exact forms.
+WHOLE_NEIGHBORHOOD_RE = re.compile(r"ц[ея]л\w*\s+квартал")
 POLYGON_KW = ("в участъка", "между", "between")
 
 
@@ -71,6 +74,9 @@ class Outage:
     recovery: str | None = None  # expected recovery, as shown
     lat: float | None = None     # if the map endpoint provides geometry
     lng: float | None = None
+    # Exterior rings of the affected area, each a list of (lng, lat) vertices.
+    # Populated from the page's GeoJSON; enables exact point-in-polygon matching.
+    polygons: list[list[tuple[float, float]]] = field(default_factory=list)
 
     @property
     def key(self) -> str:
@@ -167,7 +173,7 @@ def parse_streets(text: str) -> list[tuple[str, set[str]]]:
 
 def is_whole_neighborhood(text: str) -> bool:
     n = norm(text)
-    return any(kw in n for kw in WHOLE_NEIGHBORHOOD_KW)
+    return any(kw in n for kw in WHOLE_NEIGHBORHOOD_KW) or bool(WHOLE_NEIGHBORHOOD_RE.search(n))
 
 
 def is_polygon(text: str) -> bool:
@@ -176,11 +182,75 @@ def is_polygon(text: str) -> bool:
 
 
 # --------------------------------------------------------------------------- #
+# Geometry
+# --------------------------------------------------------------------------- #
+
+def rings_from_geojson(serialized: str | None) -> list[list[tuple[float, float]]]:
+    """Parse a GeoJSON string into exterior rings of (lng, lat) vertices.
+
+    toplo.bg serializes geometry as a JSON array of Features (occasionally a
+    single Feature or bare geometry). We keep only the exterior ring of each
+    Polygon (and of each member of a MultiPolygon) — enough for containment.
+    """
+    if not serialized:
+        return []
+    try:
+        data = json.loads(serialized)
+    except (json.JSONDecodeError, TypeError):
+        return []
+
+    features = data if isinstance(data, list) else [data]
+    rings: list[list[tuple[float, float]]] = []
+    for feat in features:
+        if not isinstance(feat, dict):
+            continue
+        geom = feat.get("geometry", feat)
+        if not isinstance(geom, dict):
+            continue
+        gtype, coords = geom.get("type"), geom.get("coordinates")
+        if not coords:
+            continue
+        if gtype == "Polygon":
+            rings.append([(float(x), float(y)) for x, y in coords[0]])
+        elif gtype == "MultiPolygon":
+            for poly in coords:
+                if poly:
+                    rings.append([(float(x), float(y)) for x, y in poly[0]])
+    return rings
+
+
+def point_in_polygon(lng: float, lat: float, ring: list[tuple[float, float]]) -> bool:
+    """Ray-casting containment test. `ring` is a list of (lng, lat) vertices."""
+    inside = False
+    n = len(ring)
+    if n < 3:
+        return False
+    j = n - 1
+    for i in range(n):
+        xi, yi = ring[i]
+        xj, yj = ring[j]
+        if (yi > lat) != (yj > lat):
+            x_cross = (xj - xi) * (lat - yi) / (yj - yi) + xi
+            if lng < x_cross:
+                inside = not inside
+        j = i
+    return inside
+
+
+# --------------------------------------------------------------------------- #
 # Matching
 # --------------------------------------------------------------------------- #
 
 def match_address(addr: Address, o: Outage) -> tuple[str, str]:
     """Return (tier, human-readable reason)."""
+    # Geometry is authoritative when BOTH the address and the outage have it:
+    # the polygon is exactly the area toplo.bg draws on its map, so containment
+    # resolves the otherwise-ambiguous "area between four streets" cases.
+    if addr.lat is not None and addr.lng is not None and o.polygons:
+        if any(point_in_polygon(addr.lng, addr.lat, r) for r in o.polygons):
+            return Tier.AFFECTED, "address falls inside the outage polygon"
+        return Tier.CLEAR, "address falls outside the outage polygon"
+
     if norm(addr.neighborhood) != norm(o.neighborhood):
         return Tier.CLEAR, "different neighborhood"
 
@@ -209,9 +279,10 @@ def match_address(addr: Address, o: Outage) -> tuple[str, str]:
                     return Tier.AFFECTED, f"street and number {addr.house_number} listed"
                 return Tier.LIKELY, f"street '{addr.street}' listed (numbers: {', '.join(sorted(nums))})"
 
-    # Area-between-streets polygon: cannot resolve from text alone
+    # Area-between-streets polygon with no usable geometry/coords to resolve it.
+    # (When geometry IS present, the point-in-polygon branch above already
+    # decided AFFECTED/CLEAR and we never reach here.)
     if is_polygon(text):
-        # If we have geometry + address coords, you could do point-in-polygon here.
         return Tier.POSSIBLE, "area defined by surrounding streets — verify boundary"
 
     # Same neighborhood, undetermined description
@@ -234,26 +305,94 @@ def evaluate(addresses: list[Address], outages: list[Outage]) -> dict[str, list[
 
 
 # --------------------------------------------------------------------------- #
-# Fetching  — THE ONE INTEGRATION POINT TO FINALIZE
+# Time / phase
 # --------------------------------------------------------------------------- #
 
+class Phase:
+    UPCOMING = "upcoming"   # planned, not started yet  -> notify ahead of time
+    ACTIVE = "active"       # in progress right now
+    ENDED = "ended"         # window is over -> drop (and report as resolved)
+
+
+def _parse_dt(s: str | None) -> datetime | None:
+    if not s:
+        return None
+    try:
+        return datetime.fromisoformat(s.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+
+def outage_phase(o: Outage, now: datetime | None = None) -> str:
+    """Classify an outage by its time window relative to `now` (UTC)."""
+    now = now or datetime.now(timezone.utc)
+    start, until = _parse_dt(o.start), _parse_dt(o.recovery)
+    if until and until < now:
+        return Phase.ENDED
+    if start and start > now:
+        return Phase.UPCOMING
+    return Phase.ACTIVE
+
+
+# --------------------------------------------------------------------------- #
+# Fetching
+# --------------------------------------------------------------------------- #
+
+# The page embeds one `var info = {...}` object per outage inside an inline
+# <script> comment. The object is JSON; we locate each occurrence and let the
+# JSON decoder consume exactly one value (raw_decode handles the braces that
+# appear *inside* the GeolocationSerialized string, which a brace-counter or a
+# greedy/lazy regex would choke on).
+_INFO_RE = re.compile(r"var\s+info\s*=\s*")
+
+
+def parse_outages_html(html: str) -> list[Outage]:
+    """Extract outages from the page HTML. Pure function — unit-testable."""
+    decoder = json.JSONDecoder()
+    outages: list[Outage] = []
+    seen: set[str] = set()
+
+    for m in _INFO_RE.finditer(html):
+        try:
+            info, _ = decoder.raw_decode(html, m.end())
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(info, dict):
+            continue
+
+        ident = info.get("AccidentId") or info.get("ContentItemId")
+        if ident and ident in seen:
+            continue
+        if ident:
+            seen.add(ident)
+
+        # "Region" is the bare neighborhood ("Люлин 9"); "Name" prefixes it with
+        # "Част от …". Prefer Region, fall back to the stripped Name.
+        neighborhood = (info.get("Region") or "").strip()
+        if not neighborhood:
+            neighborhood = strip_neighborhood((info.get("Name") or "").strip())
+
+        outages.append(Outage(
+            neighborhood=neighborhood,
+            area_text=(info.get("Addresses") or "").strip(),
+            kind="repairs" if info.get("Type") else "accident",
+            start=info.get("FromDate"),
+            recovery=info.get("UntilDate"),
+            polygons=rings_from_geojson(info.get("GeolocationSerialized")),
+        ))
+    return outages
+
+
 def fetch_raw_outages() -> list[Outage]:
-    """Fetch current outages from toplo.bg.
+    """Fetch current outages from toplo.bg and parse them into `Outage`s.
 
-    STRATEGY (do this once, then delete the NotImplementedError):
-      1. Open https://toplo.bg/accidents-and-maintenance, click the **Map** tab,
-         and inspect the Network panel for an XHR/fetch returning JSON/GeoJSON.
-         That payload almost certainly contains, per outage: neighborhood,
-         description, start time, expected recovery, and coordinates/geometry.
-         Parse THAT — it is stable and gives you geometry for polygon matching.
-      2. Fallback: parse the HTML list. The detail blocks repeat as
-         <neighborhood header> / <date> / <area text> / "Expected recovery ...".
-         Confirm the actual tags/classes in your browser, then fill in below.
-
-    Return a list[Outage].
+    The outage list and its geometry are rendered straight into the page as
+    per-outage `var info = {…}` blocks (Name, Addresses, Region, FromDate,
+    UntilDate, Type and a GeoJSON `GeolocationSerialized`). No XHR/JS execution
+    is needed — a single GET plus `parse_outages_html` gives us everything,
+    including polygons for exact point-in-polygon matching.
     """
     import requests  # lazy import so the logic above is testable without deps
-    from bs4 import BeautifulSoup  # type: ignore
 
     resp = requests.get(
         ACCIDENTS_URL,
@@ -261,24 +400,7 @@ def fetch_raw_outages() -> list[Outage]:
         timeout=30,
     )
     resp.raise_for_status()
-    soup = BeautifulSoup(resp.text, "html.parser")
-
-    # --- ADJUST THESE SELECTORS after inspecting the live DOM. -------------- #
-    # This is a best-effort skeleton based on the rendered structure, not the
-    # confirmed DOM. Prefer the JSON endpoint from step 1 above.
-    outages: list[Outage] = []
-    for block in soup.select(".accident-detail, .outage, [data-outage]"):
-        header = block.select_one("h2, .title")
-        body = block.get_text(" ", strip=True)
-        if not header:
-            continue
-        neighborhood = strip_neighborhood(header.get_text(strip=True))
-        rec = None
-        m = re.search(r"(?:Expected recovery on|Очаквано възстановяване на)\s*(.+)$", body)
-        if m:
-            rec = m.group(1).strip()
-        outages.append(Outage(neighborhood=neighborhood, area_text=body, recovery=rec))
-    return outages
+    return parse_outages_html(resp.text)
 
 
 # --------------------------------------------------------------------------- #
@@ -321,6 +443,9 @@ def diff(prev_active: dict, results: dict[str, list[dict]]) -> tuple[list, list,
                 "reason": hit["reason"],
                 "neighborhood": o.neighborhood,
                 "area_text": o.area_text,
+                "kind": o.kind,
+                "phase": outage_phase(o),
+                "start": o.start,
                 "recovery": o.recovery,
             }
             new_active[sid] = record
@@ -339,7 +464,12 @@ def diff(prev_active: dict, results: dict[str, list[dict]]) -> tuple[list, list,
 # --------------------------------------------------------------------------- #
 
 def _format_alert(record: dict, resolved: bool = False) -> str:
-    head = "✅ RESOLVED" if resolved else f"⚠️ {record['tier'].upper()}"
+    if resolved:
+        head = "✅ RESOLVED"
+    else:
+        kind = "Planned" if record.get("kind") == "repairs" else "Accident"
+        when = "UPCOMING" if record.get("phase") == Phase.UPCOMING else "ACTIVE"
+        head = f"⚠️ {record['tier'].upper()} · {kind} · {when}"
     lines = [
         f"{head} — {record['label']}",
         f"Neighborhood: {record['neighborhood']}",
@@ -347,6 +477,8 @@ def _format_alert(record: dict, resolved: bool = False) -> str:
     ]
     if not resolved:
         lines.append(f"Why: {record['reason']}")
+        if record.get("start"):
+            lines.append(f"Starts: {record['start']}")
         if record.get("recovery"):
             lines.append(f"Expected back: {record['recovery']}")
     return "\n".join(lines)
@@ -426,7 +558,10 @@ def dispatch(new_alerts: list[dict], resolved: list[dict]) -> None:
 def main() -> int:
     addresses = load_addresses()
     state = load_state()
-    outages = fetch_raw_outages()
+    now = datetime.now(timezone.utc)
+    # Keep active + upcoming (planned) outages; drop ones whose window is over
+    # so they don't fire stale alerts — and so they surface as RESOLVED instead.
+    outages = [o for o in fetch_raw_outages() if outage_phase(o, now) != Phase.ENDED]
     results = evaluate(addresses, outages)
     new_alerts, resolved, new_active = diff(state.get("active", {}), results)
     dispatch(new_alerts, resolved)

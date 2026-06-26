@@ -20,12 +20,32 @@ Outages are described in incompatible ways, so matching is not boolean:
 
 | Tier | Meaning |
 |------|---------|
-| `affected` | Whole-neighborhood outage, your block listed, or your street + house number listed. |
+| `affected` | Your `lat`/`lng` falls **inside the outage polygon**, or (no coords) whole-neighborhood outage / your block listed / your street + house number listed. |
 | `likely`   | Your street is named but without house numbers. |
-| `possible` | Right neighborhood, but the area is defined "between streets" and can't be resolved from text — **verify the boundary yourself**. |
-| `clear`    | Different neighborhood / not affected (no notification). |
+| `possible` | Right neighborhood, area defined "between streets", and we have no coordinates to resolve it — **verify the boundary yourself**. |
+| `clear`    | Outside the outage polygon, different neighborhood, or not affected (no notification). |
 
-You get notified for `possible` and above.
+You get notified for `possible` and above. When an address has `lat`/`lng` and
+the outage carries geometry, the polygon is authoritative: containment decides
+`affected` vs `clear` and the text heuristics are skipped.
+
+### Accidents, planned repairs, active & upcoming
+
+The page lists both **accidents** (`Type 0`) and **planned maintenance**
+(`Type 1`), and both currently-active and future-dated outages — all are
+monitored. Each alert is tagged so you can tell them apart:
+
+```
+⚠️ AFFECTED · Planned · UPCOMING — Home
+Starts: 2026-06-26T14:00:00Z
+Expected back: 2026-06-26T20:00:00Z
+```
+
+- **`Accident` / `Planned`** — the outage type.
+- **`ACTIVE` / `UPCOMING`** — `UPCOMING` means a planned cut that hasn't started
+  yet, so you're warned ahead of time.
+- Outages whose window has already ended are dropped, and surface once as
+  `✅ RESOLVED`. Times are local Sofia time (EET/EEST).
 
 ## Setup
 
@@ -33,8 +53,9 @@ You get notified for `possible` and above.
 2. Edit `addresses.json`. The `neighborhood` value **must match how toplo.bg
    names it** (in Bulgarian, e.g. `Борово`, `Банишора`) because matching keys off it.
    Fill `block` for block-style neighborhoods (e.g. Mladost), `street` +
-   `house_number` otherwise. `lat`/`lng` are optional today and reserved for
-   polygon matching later.
+   `house_number` otherwise. Set `lat`/`lng` to get **exact point-in-polygon
+   matching** — strongly recommended, as the site gives precise geometry per
+   outage and it eliminates the fuzzy `possible` guesses.
 3. Add notification secrets under **Settings → Secrets and variables → Actions**
    (only set the channels you want — empty ones are skipped):
    - Telegram: `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`
@@ -47,26 +68,25 @@ Message `@BotFather` → `/newbot` → copy the token. Then message your new bot
 once, open `https://api.telegram.org/bot<TOKEN>/getUpdates`, and read your
 `chat.id` from the response.
 
-## The one thing you must finalize: `fetch_raw_outages()`
+## How fetching works
 
-I can see the site's rendered text but not its live DOM or map data endpoint, so
-the fetcher is left as the integration point.
+No browser automation or API reverse-engineering needed: the page renders one
+`var info = {…}` block per outage straight into the HTML (inside an inline
+`<script>` comment). Each block carries `Name`, `Region` (the neighborhood),
+`Addresses` (the area text), `FromDate`/`UntilDate`, `Type`, and a GeoJSON
+`GeolocationSerialized` polygon. `fetch_raw_outages()` does a single GET and
+hands the HTML to `parse_outages_html()`, which locates each block and lets the
+JSON decoder consume exactly one object (robust to the braces inside the
+serialized geometry). The polygon feeds point-in-polygon matching.
 
-**Best path (do this once):** open the page, click the **Map** tab, open your
-browser's Network panel, and find the XHR/fetch that returns JSON/GeoJSON for
-the markers. That payload almost certainly includes neighborhood, description,
-times, and **coordinates** per outage. Point `fetch_raw_outages()` at it and map
-its fields onto the `Outage` dataclass. If it gives polygon geometry, you can
-upgrade the `possible` tier to exact point-in-polygon matching using each
-address's `lat`/`lng`.
-
-**Fallback:** the included HTML parser is a skeleton — confirm the real tags/
-classes in your browser and adjust the CSS selectors in `fetch_raw_outages()`.
+`parse_outages_html()` is pure, so it's unit-tested against the real embedded
+shape without any network access.
 
 ## Good to know
 
-- **Cloudflare Turnstile** protects the site. Plain HTTP fetches may work for
-  this public page; if you get blocked, switch the fetcher to Playwright.
+- **Cloudflare Turnstile** protects the site. Plain HTTP fetches currently work
+  for this public page; if you ever get blocked, switch the GET in
+  `fetch_raw_outages()` to Playwright — `parse_outages_html()` stays unchanged.
 - Scrape the **Bulgarian** page (`/accidents-and-maintenance`) — it's canonical;
   the English page often leaves descriptions in Bulgarian anyway.
 - Times shown are **local Sofia time** (EET/EEST).
