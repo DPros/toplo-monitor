@@ -572,38 +572,33 @@ def dispatch(new_alerts: list[dict], resolved: list[dict]) -> None:
 # Entry point
 # --------------------------------------------------------------------------- #
 
-def _test_alert() -> dict:
-    """A synthetic alert used by `--test` to exercise the delivery channels."""
-    return {
-        "label": "TEST", "tier": "affected", "reason": "test notification — ignore",
-        "neighborhood": "—", "area_text": "If you received this, delivery works.",
-        "kind": "accident", "phase": Phase.ACTIVE, "start": None, "recovery": None,
-    }
-
-
 def main(argv: list[str] | None = None) -> int:
     argv = sys.argv[1:] if argv is None else argv
-
-    # `--test`: send a sample notification through every configured channel and
-    # exit, without touching the live site or state.json. Lets you confirm the
-    # email/Telegram/webhook config end-to-end without waiting for a real outage.
-    if "--test" in argv:
-        print("Sending a TEST notification through all configured channels…")
-        dispatch([_test_alert()], [])
-        return 0
+    test = "--test" in argv
 
     addresses = load_addresses()
     state = load_state()
+    # `--test`: run the real pipeline but ignore saved state, so every current
+    # match is treated as new and (re)notified — and don't persist, so a test
+    # never suppresses or rewrites what a real run would do.
+    prev_active = {} if test else state.get("active", {})
+
     now = datetime.now(timezone.utc)
     # Keep active + upcoming (planned) outages; drop ones whose window is over
     # so they don't fire stale alerts — and so they surface as RESOLVED instead.
     outages = [o for o in fetch_raw_outages() if outage_phase(o, now) != Phase.ENDED]
     results = evaluate(addresses, outages)
-    new_alerts, resolved, new_active = diff(state.get("active", {}), results)
+    new_alerts, resolved, new_active = diff(prev_active, results)
+
+    if test:
+        print(f"TEST run: ignoring saved state and not persisting it — "
+              f"{len(new_alerts)} current match(es) will be (re)notified.")
     dispatch(new_alerts, resolved)
-    state["active"] = new_active
-    state["last_run"] = datetime.now(timezone.utc).isoformat()
-    save_state(state)
+
+    if not test:
+        state["active"] = new_active
+        state["last_run"] = now.isoformat()
+        save_state(state)
     return 0
 
 

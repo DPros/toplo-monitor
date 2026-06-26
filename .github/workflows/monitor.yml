@@ -9,7 +9,7 @@ on:
   workflow_dispatch:      # lets you trigger a run manually from the Actions tab
     inputs:
       test:
-        description: "Send a TEST notification through all configured channels and exit"
+        description: "Test run: re-notify all current matches, ignoring saved state (does not persist state)"
         type: boolean
         default: false
 
