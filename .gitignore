@@ -1,0 +1,15 @@
+# Node / Next.js
+node_modules/
+.next/
+out/
+dist/
+*.tsbuildinfo
+.vercel/
+
+# Env
+.env
+.env*.local
+
+# Python (legacy reference engine)
+__pycache__/
+*.pyc
