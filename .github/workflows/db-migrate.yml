@@ -1,0 +1,25 @@
+name: db-migrate
+
+# Applies Prisma migrations to the Neon database. Run manually from the Actions
+# tab whenever the schema changes. DATABASE_URL lives in the "test" environment
+# (same place as the SMTP config); secrets and variables are both supported.
+on:
+  workflow_dispatch: {}
+
+jobs:
+  migrate:
+    runs-on: ubuntu-latest
+    environment: test
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - run: npm ci
+
+      - name: prisma migrate deploy
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL || vars.DATABASE_URL }}
+        run: npx prisma migrate deploy
