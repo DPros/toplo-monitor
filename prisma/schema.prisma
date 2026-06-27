@@ -1,0 +1,130 @@
+// Prisma schema for the toplo-monitor service.
+// Use Neon's POOLED connection string for runtime (DATABASE_URL); migrations
+// can use the same URL or a direct one. Run `npm run db:generate` after edits.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// --------------------------------------------------------------------------- //
+// Auth.js (NextAuth) models — User/Account/Session/VerificationToken.
+// `passwordHash` supports the email+password credentials provider; Google
+// sign-in populates Account.
+// --------------------------------------------------------------------------- //
+
+model User {
+  id            String    @id @default(cuid())
+  name          String?
+  email         String?   @unique
+  emailVerified DateTime?
+  image         String?
+  passwordHash  String?
+  createdAt     DateTime  @default(now())
+
+  accounts  Account[]
+  sessions  Session[]
+  addresses Address[]
+}
+
+model Account {
+  id                String  @id @default(cuid())
+  userId            String
+  type              String
+  provider          String
+  providerAccountId String
+  refresh_token     String? @db.Text
+  access_token      String? @db.Text
+  expires_at        Int?
+  token_type        String?
+  scope             String?
+  id_token          String? @db.Text
+  session_state     String?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerAccountId])
+}
+
+model Session {
+  id           String   @id @default(cuid())
+  sessionToken String   @unique
+  userId       String
+  expires      DateTime
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model VerificationToken {
+  identifier String
+  token      String
+  expires    DateTime
+
+  @@unique([identifier, token])
+}
+
+// --------------------------------------------------------------------------- //
+// Domain models
+// --------------------------------------------------------------------------- //
+
+// A monitored address. lat/lng enable exact point-in-polygon matching; the
+// text fields are the fallback when an outage carries no geometry.
+model Address {
+  id           String   @id @default(cuid())
+  userId       String
+  label        String
+  neighborhood String
+  street       String   @default("")
+  houseNumber  String   @default("")
+  block        String   @default("")
+  lat          Float?
+  lng          Float?
+  // Per-address channel overrides (e.g. ["email","telegram"]); empty = account default.
+  channels     String[] @default([])
+  createdAt    DateTime @default(now())
+
+  user          User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+  notifications SentNotification[]
+
+  @@index([userId])
+}
+
+// Cache of outages scraped from toplo.bg, keyed by their AccidentId. Polygons
+// are stored as rings ([[ [lng,lat], ... ]]) for direct point-in-polygon use.
+model Outage {
+  id           String    @id @default(cuid())
+  accidentId   String    @unique
+  neighborhood String
+  areaText     String    @default("")
+  kind         String    @default("accident") // "accident" | "repairs"
+  startAt      DateTime?
+  recoveryAt   DateTime?
+  polygons     Json?
+  firstSeen    DateTime  @default(now())
+  lastSeen     DateTime  @updatedAt
+
+  notifications SentNotification[]
+}
+
+// Replaces state.json: one row per (address, outage) we've alerted on, so we
+// notify once on appearance and once on resolution. Dedup via the unique key.
+model SentNotification {
+  id         String    @id @default(cuid())
+  addressId  String
+  outageId   String
+  tier       String
+  reason     String
+  phase      String // "active" | "upcoming"
+  sentAt     DateTime  @default(now())
+  resolvedAt DateTime?
+
+  address Address @relation(fields: [addressId], references: [id], onDelete: Cascade)
+  outage  Outage  @relation(fields: [outageId], references: [id], onDelete: Cascade)
+
+  @@unique([addressId, outageId])
+  @@index([outageId])
+}
