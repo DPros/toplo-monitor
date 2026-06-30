@@ -93,11 +93,13 @@ model Address {
   @@index([userId])
 }
 
-// Cache of outages scraped from toplo.bg, keyed by their AccidentId. Polygons
-// are stored as rings ([[ [lng,lat], ... ]]) for direct point-in-polygon use.
+// Cache of outages scraped from toplo.bg. Identity is the CONTENT
+// (neighborhood|areaText) — toplo's AccidentId churns and duplicates, so it
+// can't be the key. Polygons are rings ([[ [lng,lat], ... ]]) for point-in-poly.
 model Outage {
   id           String    @id @default(cuid())
-  accidentId   String    @unique
+  key          String    @unique // contentKey: lower("neighborhood|areaText")
+  accidentId   String? // latest seen toplo id, for reference only (not unique)
   neighborhood String
   areaText     String    @default("")
   kind         String    @default("accident") // "accident" | "repairs"

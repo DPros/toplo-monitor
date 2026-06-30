@@ -106,14 +106,19 @@ async function main(): Promise<void> {
   // drops off the page (handled by the resolution pass below).
   const live = parsed.filter((o) => o.accidentId);
 
-  // Cache outages (keyed by AccidentId — fine as a cache; identity for dedup is
-  // content, handled below).
-  const byAccident = new Map<string, { id: string; engine: EngineOutage }>();
+  // Cache outages keyed by content (one row per neighborhood|areaText). Duplicate
+  // listings / churned ids collapse to a single row. accidentId is kept only as
+  // a reference.
+  const byContent = new Map<string, { id: string; engine: EngineOutage }>();
+  const seenKeys = new Set<string>();
   for (const o of live) {
+    const ck = contentKey(o.neighborhood, o.areaText);
+    seenKeys.add(ck);
     const rec = await prisma.outage.upsert({
-      where: { accidentId: o.accidentId! },
+      where: { key: ck },
       create: {
-        accidentId: o.accidentId!,
+        key: ck,
+        accidentId: o.accidentId,
         neighborhood: o.neighborhood,
         areaText: o.areaText,
         kind: o.kind ?? "accident",
@@ -122,6 +127,7 @@ async function main(): Promise<void> {
         polygons: o.polygons ?? [],
       },
       update: {
+        accidentId: o.accidentId,
         neighborhood: o.neighborhood,
         areaText: o.areaText,
         kind: o.kind ?? "accident",
@@ -130,7 +136,7 @@ async function main(): Promise<void> {
         polygons: o.polygons ?? [],
       },
     });
-    byAccident.set(o.accidentId!, { id: rec.id, engine: o });
+    byContent.set(ck, { id: rec.id, engine: o });
   }
 
   const addresses = await prisma.address.findMany({ include: { user: true } });
@@ -159,7 +165,7 @@ async function main(): Promise<void> {
       lat: addr.lat,
       lng: addr.lng,
     };
-    for (const { id: outageId, engine } of byAccident.values()) {
+    for (const { id: outageId, engine } of byContent.values()) {
       const [tier, reason] = matchAddress(engineAddr, engine);
       if (TIER_RANK[tier] < TIER_RANK[Tier.POSSIBLE]) continue;
       const akey = `${addr.id}::${contentKey(engine.neighborhood, engine.areaText)}`;
@@ -308,6 +314,15 @@ async function main(): Promise<void> {
       }
     }
     sent++;
+  }
+
+  // Drop stale cache rows: outages no longer on the page that nothing references.
+  // (Rows with notifications are kept so resolution + history stay intact.)
+  if (seenKeys.size > 0) {
+    const removed = await prisma.outage.deleteMany({
+      where: { key: { notIn: [...seenKeys] }, notifications: { none: {} } },
+    });
+    if (removed.count) console.log(`cleaned ${removed.count} stale outage rows`);
   }
 
   console.log(`outages=${live.length} emailsSent=${sent} users=${batches.size}`);
