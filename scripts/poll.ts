@@ -15,6 +15,9 @@ import { sendMail, getTransport } from "../src/lib/mailer";
 
 const ACCIDENTS_URL = "https://toplo.bg/accidents-and-maintenance";
 const CABINET_URL = process.env.APP_URL ?? "https://toplo-monitor.vercel.app/cabinet";
+// toplo.bg has no per-outage deep link (outages are highlighted on the map via
+// JS, the URL never changes), so we link the official list page.
+const TOPLO_URL = "https://toplo.bg/accidents-and-maintenance";
 
 const prisma = new PrismaClient();
 
@@ -182,7 +185,9 @@ async function main(): Promise<void> {
     const newCount = batch.items.filter((i) => i.type === "new").length;
     const resolvedCount = batch.items.length - newCount;
     const body =
-      batch.items.map(formatItem).join("\n\n") + `\n\n—\nManage your addresses: ${CABINET_URL}`;
+      batch.items.map(formatItem).join("\n\n") +
+      `\n\n—\nLive status & details on toplo.bg: ${TOPLO_URL}` +
+      `\nManage your addresses: ${CABINET_URL}`;
     const subject = `toplo: ${newCount} new, ${resolvedCount} resolved`;
     try {
       await sendMail(batch.email, subject, body);
