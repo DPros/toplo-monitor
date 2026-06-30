@@ -21,6 +21,26 @@ const TOPLO_URL = "https://toplo.bg/accidents-and-maintenance";
 
 const prisma = new PrismaClient();
 
+/** Fetch the accidents page with retries — runner↔toplo.bg can be flaky/slow. */
+async function fetchAccidentsHtml(): Promise<string> {
+  let lastErr: unknown;
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    try {
+      const res = await fetch(ACCIDENTS_URL, {
+        headers: { "User-Agent": "toplo-monitor/2.0" },
+        signal: AbortSignal.timeout(30000),
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      return await res.text();
+    } catch (err) {
+      lastErr = err;
+      console.warn(`fetch attempt ${attempt}/3 failed:`, err instanceof Error ? err.message : err);
+      if (attempt < 3) await new Promise((r) => setTimeout(r, attempt * 3000));
+    }
+  }
+  throw lastErr;
+}
+
 function parseDt(s?: string | null): Date | null {
   if (!s) return null;
   const d = new Date(s);
@@ -69,9 +89,7 @@ function formatItem(item: NewItem | ResolvedItem): string {
 async function main(): Promise<void> {
   const now = new Date();
 
-  const res = await fetch(ACCIDENTS_URL, { headers: { "User-Agent": "toplo-monitor/2.0" } });
-  if (!res.ok) throw new Error(`Fetch failed: HTTP ${res.status}`);
-  const parsed = parseOutagesHtml(await res.text());
+  const parsed = parseOutagesHtml(await fetchAccidentsHtml());
   // Everything still listed on the page is current. toplo.bg keeps outages
   // listed past their stated recovery time (they get extended), so page
   // presence is authoritative — NOT UntilDate. An outage is only resolved when
