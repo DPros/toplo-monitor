@@ -69,8 +69,11 @@ async function main(): Promise<void> {
   const res = await fetch(ACCIDENTS_URL, { headers: { "User-Agent": "toplo-monitor/2.0" } });
   if (!res.ok) throw new Error(`Fetch failed: HTTP ${res.status}`);
   const parsed = parseOutagesHtml(await res.text());
-  // Keep active + upcoming; an ended outage simply drops out and resolves.
-  const live = parsed.filter((o) => o.accidentId && outagePhase(o, now) !== "ended");
+  // Everything still listed on the page is current. toplo.bg keeps outages
+  // listed past their stated recovery time (they get extended), so page
+  // presence is authoritative — NOT UntilDate. An outage is only resolved when
+  // it drops off the page (handled by the resolution pass below).
+  const live = parsed.filter((o) => o.accidentId);
 
   // Upsert outages; map accidentId -> { dbId, engine }.
   const byAccident = new Map<string, { id: string; engine: EngineOutage }>();
