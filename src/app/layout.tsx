@@ -1,4 +1,6 @@
 import type { ReactNode } from "react";
+import "./globals.css";
+import Header from "@/components/Header";
 
 export const metadata = {
   title: "Toplo Monitor",
@@ -8,7 +10,10 @@ export const metadata = {
 export default function RootLayout({ children }: { children: ReactNode }) {
   return (
     <html lang="en">
-      <body style={{ margin: 0, fontFamily: "system-ui, sans-serif" }}>{children}</body>
+      <body>
+        <Header />
+        {children}
+      </body>
     </html>
   );
 }

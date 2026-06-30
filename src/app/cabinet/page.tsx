@@ -1,5 +1,5 @@
 import { redirect } from "next/navigation";
-import { auth, signOut } from "@/lib/auth";
+import { auth } from "@/lib/auth";
 import { prisma } from "@/lib/db";
 import AddAddressForm from "@/components/AddAddressForm";
 import { deleteAddress } from "./actions";
@@ -15,19 +15,9 @@ export default async function Cabinet() {
 
   return (
     <main style={{ maxWidth: 680, margin: "2.5rem auto", padding: "0 1rem" }}>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-        <h1 style={{ margin: 0 }}>Your addresses</h1>
-        <form
-          action={async () => {
-            "use server";
-            await signOut({ redirectTo: "/" });
-          }}
-        >
-          <button type="submit">Sign out</button>
-        </form>
-      </div>
+      <h1 style={{ margin: 0 }}>Your addresses</h1>
       <p style={{ color: "#666", marginTop: 4 }}>
-        Signed in as {session.user.email ?? session.user.name}. We alert you by email when an outage covers a pin.
+        We email you when an outage covers one of your pins.
       </p>
 
       <section style={{ margin: "1.5rem 0" }}>
