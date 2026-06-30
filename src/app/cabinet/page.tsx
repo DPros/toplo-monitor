@@ -1,14 +1,22 @@
 import { redirect } from "next/navigation";
 import { auth, signOut } from "@/lib/auth";
+import { prisma } from "@/lib/db";
+import AddAddressForm from "@/components/AddAddressForm";
+import { deleteAddress } from "./actions";
 
 export default async function Cabinet() {
   const session = await auth();
-  if (!session?.user) redirect("/signin");
+  if (!session?.user?.id) redirect("/signin");
+
+  const addresses = await prisma.address.findMany({
+    where: { userId: session.user.id },
+    orderBy: { createdAt: "asc" },
+  });
 
   return (
-    <main style={{ maxWidth: 640, margin: "3rem auto", padding: "0 1rem" }}>
+    <main style={{ maxWidth: 680, margin: "2.5rem auto", padding: "0 1rem" }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-        <h1>Your cabinet</h1>
+        <h1 style={{ margin: 0 }}>Your addresses</h1>
         <form
           action={async () => {
             "use server";
@@ -18,10 +26,49 @@ export default async function Cabinet() {
           <button type="submit">Sign out</button>
         </form>
       </div>
-      <p>
-        Signed in as <strong>{session.user.email ?? session.user.name}</strong>.
+      <p style={{ color: "#666", marginTop: 4 }}>
+        Signed in as {session.user.email ?? session.user.name}. We alert you by email when an outage covers a pin.
       </p>
-      <p style={{ color: "#888" }}>Address management &amp; the Leaflet map land in the next phase.</p>
+
+      <section style={{ margin: "1.5rem 0" }}>
+        {addresses.length === 0 ? (
+          <p style={{ color: "#888" }}>No addresses yet — add your first below.</p>
+        ) : (
+          <ul style={{ listStyle: "none", padding: 0, display: "grid", gap: 10 }}>
+            {addresses.map((a) => (
+              <li
+                key={a.id}
+                style={{
+                  border: "1px solid #e3e3e3",
+                  borderRadius: 8,
+                  padding: "10px 12px",
+                  display: "flex",
+                  justifyContent: "space-between",
+                  alignItems: "center",
+                }}
+              >
+                <div>
+                  <strong>{a.label}</strong>
+                  <div style={{ color: "#777", fontSize: 13 }}>
+                    {a.neighborhood ? `${a.neighborhood} · ` : ""}
+                    {a.lat?.toFixed(5)}, {a.lng?.toFixed(5)}
+                  </div>
+                </div>
+                <form action={deleteAddress}>
+                  <input type="hidden" name="id" value={a.id} />
+                  <button type="submit" style={{ color: "crimson" }}>
+                    Delete
+                  </button>
+                </form>
+              </li>
+            ))}
+          </ul>
+        )}
+      </section>
+
+      <section style={{ borderTop: "1px solid #eee", paddingTop: "1.5rem" }}>
+        <AddAddressForm />
+      </section>
     </main>
   );
 }
