@@ -70,6 +70,7 @@ export function parseOutagesHtml(html: string): Outage[] {
     if (!neighborhood) neighborhood = stripNeighborhood((info.Name || "").trim());
 
     outages.push({
+      accidentId: ident,
       neighborhood,
       areaText: (info.Addresses || "").trim(),
       kind: info.Type ? "repairs" : "accident",

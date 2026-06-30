@@ -1,0 +1,42 @@
+name: poll
+
+# Multi-user outage poller for the new service. Fetches toplo.bg once, evaluates
+# every user's pinned addresses, and emails new/resolved alerts. State lives in
+# Postgres (SentNotification), so unlike the legacy monitor there's nothing to
+# commit back. Reuses DATABASE_URL + SMTP from the "test" environment.
+on:
+  schedule:
+    - cron: "0 */3 * * *"
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+concurrency:
+  group: toplo-poll
+  cancel-in-progress: false
+
+jobs:
+  poll:
+    runs-on: ubuntu-latest
+    environment: test
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - run: npm ci
+
+      - run: npx prisma generate
+
+      - name: Poll outages and notify
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL || vars.DATABASE_URL }}
+          SMTP_HOST:    ${{ secrets.SMTP_HOST    || vars.SMTP_HOST }}
+          SMTP_PORT:    ${{ secrets.SMTP_PORT    || vars.SMTP_PORT }}
+          SMTP_USER:    ${{ secrets.SMTP_USER    || vars.SMTP_USER }}
+          SMTP_PASS:    ${{ secrets.SMTP_PASS    || vars.SMTP_PASS }}
+          EMAIL_FROM:   ${{ secrets.EMAIL_FROM   || vars.EMAIL_FROM }}
+        run: npm run poll

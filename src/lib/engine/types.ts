@@ -20,6 +20,8 @@ export interface Address {
 export type OutageKind = "accident" | "repairs";
 
 export interface Outage {
+  /** toplo.bg AccidentId (or ContentItemId) — stable identity for caching/dedup. */
+  accidentId?: string;
   /** Normalized neighborhood, e.g. "Борово". */
   neighborhood: string;
   /** Raw area description, e.g. 'бл.45 от вх.1 до вх.6'. */
